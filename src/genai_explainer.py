@@ -60,7 +60,7 @@ Nutritional information:
 Write 5–7 sentences explaining:
 1. Whether the dish is heavy/light/balanced in terms of energy.
 2. Health implications of its calories, fat, carbs, and protein.
-3. Suggest 2 healthier alternatives (optionally inspired by Azerbaijani cuisine).
+3. Give information about history of meal
 4. Suggest 1 way to reduce calorie intake for this dish.
 5. Adapt your advice to the user's goal, activity level and diet preference if provided.
 
