@@ -15,12 +15,13 @@ from PIL import Image
 
 # Make sure we can import from src/
 ROOT_DIR = Path(__file__).resolve().parent.parent
-SRC_DIR = ROOT_DIR / "src"
+SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.append(str(SRC_DIR))
 
-from predict import predict_dish_and_nutrition 
-from src.genai_explainer import generate_explanation
-from calories import NUTRITION_TABLE 
+from predict import predict_dish_and_nutrition
+from genai_explainer import generate_explanation
+from calories import NUTRITION_TABLE
+ 
 
 
 st.set_page_config(page_title="FoodVisionAI - Azerbaijani Cuisine", page_icon="🍽️")
