@@ -18,7 +18,7 @@ from PIL import Image
 
 from calories import NUTRITION_TABLE
 
-CONFIDENCE_THRESHOLD = 0.40  # When model less than confident 40% give a response "I dont Know"
+CONFIDENCE_THRESHOLD = 0.35  # When model less than confident 40% give a response "I dont Know"
 
 DEVICE = torch.device(
     "mps" if torch.backends.mps.is_available()
