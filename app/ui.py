@@ -203,6 +203,34 @@ if uploaded_image is not None:
         f"(portion factor: x{portion_factor:.1f})"
     )
 
+    # ---- Save user feedback ----
+st.subheader("Was the prediction correct?")
+
+feedback = st.radio(
+    "Help improve the model:",
+    ["Yes, prediction was correct", "No, the model was wrong"],
+    index=0,
+)
+
+if feedback == "No, the model was wrong":
+    st.write("Select the correct dish label:")
+    correct_label = st.selectbox("Correct dish:", options=all_classes)
+
+    if st.button("Save feedback"):
+        import os
+        import uuid
+
+        feedback_dir = Path("data/user_feedback") / correct_label
+        feedback_dir.mkdir(parents=True, exist_ok=True)
+
+        # Unique filename
+        filename = f"{uuid.uuid4().hex}.jpg"
+        save_path = feedback_dir / filename
+
+        img.save(save_path)
+        st.success(f"Feedback saved! Image stored as {save_path}")
+
+
     # ---- Nutritional information output ----
     st.subheader("Estimated nutritional information (total)")
 
