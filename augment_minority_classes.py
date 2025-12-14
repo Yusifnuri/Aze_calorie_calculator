@@ -1,23 +1,42 @@
 #!/usr/bin/env python3
 """
-Aggressive data augmentation for minority classes
-Generates 10x more images from existing ones
+Aggressive data augmentation for minority classes.
+Automatically finds classes with fewer than TARGET images and augments them.
 """
 
-import os
 from pathlib import Path
 from PIL import Image, ImageEnhance, ImageFilter
 import random
-import json
-
-# Classes that need augmentation (< 65 images)
-MINORITY_CLASSES = [
-    'baki_qurabiyesi', 'dolma', 'dovga', 'dushbere', 
-    'lule_kabab', 'paxlava', 'plov', 'qutab',
-    'seki_halvasi', 'shashlik', 'xash', 'yarpaq_xengel'
-]
+import uuid
+from typing import Dict, List, Optional
 
 TARGET_IMAGES_PER_CLASS = 150  # Target after augmentation
+IMAGE_PATTERNS = ("*.jpg", "*.jpeg", "*.png")
+
+
+def collect_image_files(class_path: Path):
+    """Return all supported image files in a class directory."""
+    files = []
+    for pattern in IMAGE_PATTERNS:
+        files.extend(class_path.glob(pattern))
+    return files
+
+
+def compute_class_counts(data_path: Path) -> Dict[str, int]:
+    """Count images per class directory."""
+    counts = {}
+    for class_dir in sorted(data_path.iterdir()):
+        if class_dir.is_dir():
+            counts[class_dir.name] = len(collect_image_files(class_dir))
+    return counts
+
+
+def detect_minority_classes(class_counts: Dict[str, int], target_count: int) -> List[str]:
+    """Return classes that have fewer images than the target."""
+    return sorted(
+        [cls for cls, count in class_counts.items() if count < target_count],
+        key=lambda cls: class_counts[cls]
+    )
 
 
 def augment_image(img, seed=None):
@@ -99,9 +118,7 @@ def augment_class(class_dir, target_count=TARGET_IMAGES_PER_CLASS):
     class_name = class_path.name
     
     # Get existing images
-    existing_images = list(class_path.glob("*.jpg")) + \
-                     list(class_path.glob("*.jpeg")) + \
-                     list(class_path.glob("*.png"))
+    existing_images = collect_image_files(class_path)
     
     if not existing_images:
         print(f"  ⚠️  No images found in {class_name}")
@@ -115,10 +132,6 @@ def augment_class(class_dir, target_count=TARGET_IMAGES_PER_CLASS):
         return 0
     
     print(f"  🔄 {class_name}: {current_count} → {target_count} ({needed} new images)")
-    
-    # Create augmented directory
-    aug_dir = class_path / "augmented"
-    aug_dir.mkdir(exist_ok=True)
     
     generated = 0
     attempts = 0
@@ -134,8 +147,9 @@ def augment_class(class_dir, target_count=TARGET_IMAGES_PER_CLASS):
             aug_img, aug_list = augment_image(img)
             
             # Save with descriptive name
-            aug_name = f"aug_{source_img_path.stem}_{'_'.join(aug_list[:3])}_{attempts}.jpg"
-            save_path = aug_dir / aug_name
+            aug_suffix = "_".join(aug_list[:3]) if aug_list else "base"
+            aug_name = f"aug_{source_img_path.stem}_{aug_suffix}_{uuid.uuid4().hex[:6]}.jpg"
+            save_path = class_path / aug_name
             
             aug_img.save(save_path, quality=95)
             generated += 1
@@ -149,7 +163,11 @@ def augment_class(class_dir, target_count=TARGET_IMAGES_PER_CLASS):
     return generated
 
 
-def augment_dataset(data_dir="data/train", target_count=TARGET_IMAGES_PER_CLASS):
+def augment_dataset(
+    data_dir="data/train",
+    target_count=TARGET_IMAGES_PER_CLASS,
+    specific_classes: Optional[List[str]] = None,
+):
     """
     Augment all minority classes in the dataset
     """
@@ -158,18 +176,44 @@ def augment_dataset(data_dir="data/train", target_count=TARGET_IMAGES_PER_CLASS)
     if not data_path.exists():
         print(f"❌ Directory not found: {data_dir}")
         return
+
+    class_counts = compute_class_counts(data_path)
+    if not class_counts:
+        print(f"❌ No class folders found in {data_path}")
+        return
+
+    if specific_classes:
+        classes_to_augment = []
+        for class_name in specific_classes:
+            class_dir = data_path / class_name
+            if not class_dir.exists():
+                print(f"  ⚠️  Class directory not found: {class_name}")
+                continue
+            classes_to_augment.append(class_name)
+    else:
+        classes_to_augment = detect_minority_classes(class_counts, target_count)
     
+    if not classes_to_augment:
+        print("=" * 80)
+        print("✅ All classes already meet or exceed the target image count!")
+        print("=" * 80)
+        return
+
     print("=" * 80)
     print("🔄 DATA AUGMENTATION FOR MINORITY CLASSES")
     print("=" * 80)
     print(f"\n📁 Dataset: {data_path}")
     print(f"🎯 Target: {target_count} images per class")
-    print(f"🏷️  Classes to augment: {len(MINORITY_CLASSES)}")
+    source_msg = "auto-detected (below target)" if not specific_classes else "manual selection"
+    print(f"🏷️  Classes to augment: {len(classes_to_augment)} [{source_msg}]")
+    for class_name in classes_to_augment:
+        current = class_counts.get(class_name, 0)
+        print(f"   - {class_name:25s} {current:4d} images")
     print()
     
     total_generated = 0
     
-    for class_name in MINORITY_CLASSES:
+    for class_name in classes_to_augment:
         class_dir = data_path / class_name
         
         if not class_dir.exists():
@@ -186,14 +230,10 @@ def augment_dataset(data_dir="data/train", target_count=TARGET_IMAGES_PER_CLASS)
     print("=" * 80)
     print()
     print("📋 NEXT STEPS:")
-    print("1. Move augmented images to main class folders:")
-    print("   cd data/train/dolma")
-    print("   mv augmented/* .")
-    print()
-    print("2. Run dataset analysis again:")
+    print("1. Run dataset analysis again:")
     print("   python data_analysis.py")
     print()
-    print("3. Retrain model with balanced dataset:")
+    print("2. Retrain model with balanced dataset:")
     print("   python train.py --use_class_weights")
     print()
 
@@ -217,14 +257,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "--classes",
         nargs="+",
-        default=MINORITY_CLASSES,
-        help="Specific classes to augment"
+        default=None,
+        help="Optional list of classes to augment (defaults to all classes below target)"
     )
     
     args = parser.parse_args()
-    
-    if args.classes != MINORITY_CLASSES:
-        MINORITY_CLASSES.clear()
-        MINORITY_CLASSES.extend(args.classes)
-    
-    augment_dataset(args.data_dir, args.target)
+    augment_dataset(args.data_dir, args.target, args.classes)

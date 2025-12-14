@@ -15,6 +15,7 @@ NUTRITION_TABLE = {
     "lule_kabab": {"calories": 280, "fat": 20, "carbs": 4, "protein": 22},
     "shashlik": {"calories": 260, "fat": 18, "carbs": 3, "protein": 22},
     "dushbere": {"calories": 400, "fat": 14, "carbs": 48, "protein": 18},
+    "bozbash": {"calories": 480, "fat": 24, "carbs": 32, "protein": 28},
     "piti": {"calories": 600, "fat": 28, "carbs": 40, "protein": 30},
     "xengel": {"calories": 550, "fat": 24, "carbs": 55, "protein": 20},
     "sac_kebab": {"calories": 700, "fat": 40, "carbs": 30, "protein": 35},
