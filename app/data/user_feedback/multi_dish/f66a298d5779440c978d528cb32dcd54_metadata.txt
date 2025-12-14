@@ -1,0 +1,2 @@
+Detected: fried_chicken, spagetti, french_fries
+Actual: dolma
