@@ -1,7 +1,7 @@
 {
-  "total_images": 4713,
-  "num_classes": 23,
-  "avg_per_class": 204.91304347826087,
+  "total_images": 4823,
+  "num_classes": 24,
+  "avg_per_class": 200.95833333333334,
   "class_counts": {
     "baki_qurabiyesi": 245,
     "bozbash": 150,
@@ -13,6 +13,7 @@
     "fried_chicken": 168,
     "ice_cream": 232,
     "lule_kabab": 150,
+    "non_meal": 110,
     "paxlava": 150,
     "piti": 150,
     "pizza": 352,

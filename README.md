@@ -40,6 +40,7 @@ Image classification pipeline that recognises Azerbaijani and selected internati
 
 ## Dataset Preparation
 - Place training images under `data/train/<class_name>` and validation images under `data/val/<class_name>`.
+- Include a `non_meal` class populated with non-food images (people, landscapes, etc.) so the model can explicitly learn when no meal is present.
 - Run the dataset report to understand balance and counts:
   ```bash
   python data_analysis.py --data_dir data/train

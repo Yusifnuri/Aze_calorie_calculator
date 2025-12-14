@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, WeightedRandomSampler
 from torchvision import datasets, transforms, models
-from sklearn.utils.class_weight import compute_class_weight
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
@@ -47,13 +46,14 @@ def compute_class_weights(dataset):
     
     labels = np.array(labels, dtype=np.int64)  # Explicit numpy array
     unique_classes = np.unique(labels)
+    total_samples = len(labels)
+    num_classes = len(unique_classes)
     
-    # Compute balanced weights
-    weights = compute_class_weight(
-        class_weight='balanced',
-        classes=unique_classes,
-        y=labels
-    )
+    weights = []
+    for cls in unique_classes:
+        cls_count = max(np.sum(labels == cls), 1)
+        weight = total_samples / (num_classes * cls_count)
+        weights.append(weight)
     
     # Show weights for minority classes
     weights_tensor = torch.FloatTensor(weights)
@@ -283,7 +283,7 @@ def train_model(
         train_dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=2,
+        num_workers=0,
         pin_memory=True if DEVICE.type == "cuda" else False
     )
     
@@ -291,7 +291,7 @@ def train_model(
         val_dataset,
         batch_size=batch_size,
         shuffle=False,
-        num_workers=2,
+        num_workers=0,
         pin_memory=True if DEVICE.type == "cuda" else False
     )
     

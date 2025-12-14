@@ -26,6 +26,7 @@ NUTRITION_TABLE = {
     "seki_halvasi": {"calories": 250, "fat": 12, "carbs": 32, "protein": 4},
     "xash": {"calories": 350, "fat": 20, "carbs": 8, "protein": 30},
     "baki_qurabiyesi": {"calories": 180, "fat": 9, "carbs": 23, "protein": 3},
+    "non_meal": {"calories": 0, "fat": 0, "carbs": 0, "protein": 0},
 
     # Global dishes
     "burger": {"calories": 550, "fat": 30, "carbs": 45, "protein": 25},

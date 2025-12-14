@@ -18,7 +18,11 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.append(str(SRC_DIR))
 
-from predict import predict_dish_and_nutrition
+from predict import (
+    DEFAULT_CHECKPOINT,
+    load_model,
+    predict_dish_and_nutrition,
+)
 from genai_explainer import generate_explanation
 from calories import NUTRITION_TABLE
 
@@ -28,6 +32,12 @@ st.set_page_config(
     page_icon="🍽️",
     layout="wide"
 )
+
+@st.cache_resource(show_spinner=False)
+def load_model_cached(checkpoint_path: str):
+    """Load and cache the PyTorch model once per Streamlit session."""
+    return load_model(Path(checkpoint_path))
+
 
 st.title("🇦🇿 Azerbaijani Cuisine Nutrition Analyzer")
 
@@ -108,6 +118,7 @@ if uploaded_image is not None:
         st.image(img, caption="Uploaded image", use_container_width=True)
     
     with col2:
+        model_bundle = load_model_cached(str(DEFAULT_CHECKPOINT))
         should_run_inference = (
             st.session_state.last_image_bytes != image_bytes
             or st.session_state.last_prediction is None
@@ -117,7 +128,8 @@ if uploaded_image is not None:
             with st.spinner("🔄 Analyzing image with AI..."):
                 result = predict_dish_and_nutrition(
                     img, 
-                    multi_detection=multi_detection
+                    multi_detection=multi_detection,
+                    model_bundle=model_bundle,
                 )
             st.session_state.last_prediction = result
             st.session_state.last_image_bytes = image_bytes
@@ -127,16 +139,23 @@ if uploaded_image is not None:
         detected_dishes = result["detected_dishes"]
         primary_dish = result["primary_dish"]
         is_confident = result["is_confident"]
+        non_meal_detected = result.get("non_meal_detected", False)
         all_candidates = result.get("all_candidates", [])
         all_classes = result.get("all_classes", [])
 
         # ---------------------------------------------------------
         # CASE 1: Model is NOT confident / No meals detected
         # ---------------------------------------------------------
-        if not is_confident or len(detected_dishes) == 0:
-            if primary_dish is None:
+        if non_meal_detected or not is_confident or len(detected_dishes) == 0:
+            if non_meal_detected:
+                st.error("🚫 Non-meal Image")
+                st.warning(
+                    "Model detected that the uploaded photo does not contain food. "
+                    "Try another picture that clearly shows a meal."
+                )
+            elif primary_dish is None:
                 st.error("🚫 Not Food / Unknown")
-                st.warning("Bu şəkil yemək kimi görünmür (və ya model qərarsızdır). Zəhmət olmasa yemək şəkli yüklə.")
+                st.warning("This photo does not look like food (or the model is uncertain). Please upload a meal photo.")
             else:
                 st.error("🚫 No Meals Detected")
                 st.warning(

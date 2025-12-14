@@ -5,8 +5,10 @@
 
 from collections import Counter
 from pathlib import Path
-from typing import Union
+from typing import List, Optional, Tuple, Union
 
+import numpy as np
+import random
 import torch
 from torch import nn
 from torchvision import models, transforms
@@ -18,10 +20,13 @@ from calories import NUTRITION_TABLE
 PRIMARY_CONFIDENCE_THRESHOLD = 0.40  # Increased from 0.30 to 0.40
 SECONDARY_CONFIDENCE_THRESHOLD = 0.15  # Allow easier secondary detections
 MAX_DETECTIONS = 5  # Maximum number of dishes to detect
-OOD_MIN_TOP1 = 0.60          # avg top1 çox aşağıdırsa unknown
-OOD_MIN_AGREEMENT = 0.55     # view-ların neçə faizi eyni top1 deyir
-OOD_MAX_STD_TOP1 = 0.22      # top1 confidence view-lar üzrə çox oynayırsa unknown
+OOD_MIN_TOP1 = 0.60          # treat as unknown if average top-1 confidence is too low
+OOD_MIN_AGREEMENT = 0.55     # percentage of views that must agree on the same top-1 dish
+OOD_MAX_STD_TOP1 = 0.22      # treat as unknown if top-1 confidence varies too much across views
 UNKNOWN_LABEL = "unknown"
+NON_MEAL_LABEL = "non_meal"
+NON_MEAL_CONFIDENCE_THRESHOLD = 0.45
+NON_MEAL_AUTO_THRESHOLD = 0.50  # below this confidence treat as non-food
 
 # Known confusion pairs - dishes that model often confuses
 CONFUSION_PAIRS = {
@@ -55,6 +60,33 @@ DEVICE = torch.device(
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_CHECKPOINT = ROOT_DIR / "azeri_food_model.pt"
+
+
+def set_deterministic(seed: int = 42):
+    """
+    Ensure deterministic inference by fixing RNG state across libraries.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+    if torch.backends.mps.is_available():
+        # MPS does not currently expose additional determinism flags,
+        # so we rely on manual seeds alone.
+        pass
+
+    try:
+        torch.use_deterministic_algorithms(True)
+    except Exception:
+        # Some ops (e.g., on MPS) do not support strict determinism.
+        pass
+
+
+set_deterministic()
 
 
 def build_model(num_classes: int):
@@ -96,36 +128,33 @@ def load_model(checkpoint_path: Path):
 
     return model, class_names
 
-def preprocess_image(image: Union[str, Path, Image.Image], n_views: int = 8):
-    """
-    Create multiple augmented views of the same image for robustness / OOD gating.
-    Returns: List[Tensor] each shape [1,3,224,224]
-    """
-    base = transforms.Compose([
-        transforms.Resize((256, 256)),
-    ])
 
-    aug = transforms.Compose([
-        transforms.RandomResizedCrop(224, scale=(0.65, 1.0)),
-        transforms.RandomHorizontalFlip(p=0.5),
-        transforms.ColorJitter(brightness=0.25, contrast=0.25, saturation=0.25, hue=0.05),
+def get_infer_transform(image_size: int = 224):
+    """
+    Deterministic preprocessing for inference (no random augmentations).
+    """
+    return transforms.Compose([
+        transforms.Resize(256),
+        transforms.CenterCrop(image_size),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
     ])
+
+
+def preprocess_image(image: Union[str, Path, Image.Image]):
+    """
+    Deterministic preprocessing pipeline returning a single tensor.
+    """
+    infer_transform = get_infer_transform()
 
     if isinstance(image, (str, Path)):
         img = Image.open(image).convert("RGB")
     else:
         img = image.convert("RGB")
 
-    img = base(img)
-
-    views = []
-    for _ in range(n_views):
-        views.append(aug(img).unsqueeze(0))  # [1,3,224,224]
-    return views
-
+    processed = infer_transform(img).unsqueeze(0)
+    return processed
 
 
 def apply_visual_similarity_boost(sorted_probs, sorted_indices, class_names):
@@ -206,6 +235,7 @@ def predict_dish_and_nutrition(
     checkpoint_path: Union[str, Path, None] = None,
     multi_detection: bool = True,
     max_detections: int = MAX_DETECTIONS,
+    model_bundle: Optional[Tuple[torch.nn.Module, List[str]]] = None,
 ):
     """
     Main prediction function with MULTI-DETECTION support.
@@ -218,98 +248,42 @@ def predict_dish_and_nutrition(
         - is_confident: bool (whether primary dish is confident enough)
     """
 
-    # Load checkpoint
-    if checkpoint_path is None:
-        checkpoint_path = DEFAULT_CHECKPOINT
+    if model_bundle is not None:
+        model, class_names = model_bundle
     else:
-        checkpoint_path = Path(checkpoint_path)
+        if checkpoint_path is None:
+            checkpoint_path = DEFAULT_CHECKPOINT
+        else:
+            checkpoint_path = Path(checkpoint_path)
 
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(f"Model checkpoint not found: {checkpoint_path}")
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Model checkpoint not found: {checkpoint_path}")
 
-    # Load model and class names
-    model, class_names = load_model(checkpoint_path)
+        model, class_names = load_model(checkpoint_path)
 
-    # Preprocess image - returns multiple views
-    input_tensors = preprocess_image(image)
-    
-    # Ensure all tensors are 4D [batch, channels, height, width]
-    input_tensors = [t if t.dim() == 4 else t.unsqueeze(0) for t in input_tensors]
-    
-    # Ensemble prediction - average predictions from multiple views
-    all_probs = []
-    
+    input_tensor = preprocess_image(image)
+    if input_tensor.dim() == 3:
+        input_tensor = input_tensor.unsqueeze(0)
+
     with torch.no_grad():
-        for input_tensor in input_tensors:
-            input_tensor = input_tensor.to(DEVICE)
-            outputs = model(input_tensor)
-            probs = torch.softmax(outputs, dim=1)[0]
-            all_probs.append(probs)
-        
-        # Average probabilities across all views
-        avg_probs = torch.stack(all_probs).mean(dim=0)
+        input_tensor = input_tensor.to(DEVICE)
+        outputs = model(input_tensor)
+        probs = torch.softmax(outputs, dim=1)[0]
 
-        # ---- OOD / NOT-FOOD GATE (stability across views) ----
-        view_top1 = [int(p.argmax().item()) for p in all_probs]
-        view_top1_probs = [float(p.max().item()) for p in all_probs]
+        sorted_probs, sorted_indices = torch.sort(probs, descending=True)
 
-        most_common_idx, count = Counter(view_top1).most_common(1)[0]
-        agreement = count / len(view_top1)
-
-        avg_top1 = float(avg_probs.max().item())
-        std_top1 = float(torch.tensor(view_top1_probs).std().item())
-
-        is_ood = (
-            (avg_top1 < OOD_MIN_TOP1)
-            or ((agreement < OOD_MIN_AGREEMENT) and (std_top1 > OOD_MAX_STD_TOP1))
-        )
-
-        if is_ood:
-            sorted_probs, sorted_indices = torch.sort(avg_probs, descending=True)
-            secondary_dish = None
-            secondary_confidence = 0.0
-            if len(sorted_probs) > 1:
-                secondary_idx = int(sorted_indices[1])
-                secondary_dish = class_names[secondary_idx]
-                secondary_confidence = float(sorted_probs[1])
-
-            all_candidates = []
-            for i in range(min(5, len(sorted_probs))):
-                idx = int(sorted_indices[i])
-                all_candidates.append({
-                    "dish": class_names[idx],
-                    "confidence": float(sorted_probs[i])
-                })
-
-            return {
-                "detected_dishes": [],
-                "primary_dish": None,
-                "primary_confidence": avg_top1,
-                "secondary_dish": secondary_dish,
-                "secondary_confidence": secondary_confidence,
-                "all_candidates": all_candidates,
-                "all_classes": class_names,
-                "is_confident": False,
-                "ood_debug": {
-                    "avg_top1": avg_top1,
-                    "agreement": agreement,
-                    "std_top1": std_top1
-                }
-            }
-        # ---- end OOD gate ----
-        
-        # Get sorted predictions
-        sorted_probs, sorted_indices = torch.sort(avg_probs, descending=True)
-        
-        # Apply visual similarity boost for known confusions
         sorted_probs, sorted_indices = apply_visual_similarity_boost(
             sorted_probs, sorted_indices, class_names
         )
 
-        # Primary dish (highest confidence after boosting)
         primary_idx = int(sorted_indices[0])
         primary_dish = class_names[primary_idx]
         primary_confidence = float(sorted_probs[0])
+        non_meal_detected = (
+            primary_dish == NON_MEAL_LABEL
+            and primary_confidence >= NON_MEAL_CONFIDENCE_THRESHOLD
+        )
+        non_meal_from_low_conf = primary_confidence < NON_MEAL_AUTO_THRESHOLD
         secondary_dish = None
         secondary_confidence = 0.0
         if len(sorted_probs) > 1:
@@ -317,10 +291,27 @@ def predict_dish_and_nutrition(
             secondary_dish = class_names[secondary_idx]
             secondary_confidence = float(sorted_probs[1])
 
-        # Check if primary dish is confident enough
         is_confident = primary_confidence >= PRIMARY_CONFIDENCE_THRESHOLD
+        if non_meal_detected or non_meal_from_low_conf:
+            all_candidates = []
+            for i in range(min(5, len(sorted_probs))):
+                idx = int(sorted_indices[i])
+                all_candidates.append({
+                    "dish": class_names[idx],
+                    "confidence": float(sorted_probs[i])
+                })
+            return {
+                "detected_dishes": [],
+                "primary_dish": None,
+                "primary_confidence": primary_confidence,
+                "secondary_dish": secondary_dish,
+                "secondary_confidence": secondary_confidence,
+                "all_candidates": all_candidates,
+                "all_classes": class_names,
+                "is_confident": False,
+                "non_meal_detected": True,
+            }
 
-        # Multi-detection: find all dishes above threshold
         detected_dishes = []
         all_candidates = []
 
@@ -329,11 +320,12 @@ def predict_dish_and_nutrition(
             dish_name = class_names[idx]
             confidence = float(sorted_probs[i])
 
-            # Determine threshold based on position
+            if dish_name == NON_MEAL_LABEL:
+                continue
+
             threshold = PRIMARY_CONFIDENCE_THRESHOLD if i == 0 else SECONDARY_CONFIDENCE_THRESHOLD
 
             if confidence >= threshold:
-                # Get nutrition info
                 nutrition = NUTRITION_TABLE.get(dish_name, {
                     "calories": 0,
                     "fat": 0,
@@ -353,18 +345,15 @@ def predict_dish_and_nutrition(
                 elif i == 0:
                     detected_dishes.append(dish_info)
 
-            # Keep track of all reasonable candidates for UI selection
             if confidence >= SECONDARY_CONFIDENCE_THRESHOLD * 0.5:
                 all_candidates.append({
                     "dish": dish_name,
                     "confidence": confidence
                 })
 
-    # Apply post-processing filter to reduce false positives
     if multi_detection and len(detected_dishes) > 1:
         detected_dishes = apply_post_processing_filter(detected_dishes, primary_confidence)
 
-    # If not confident enough, return None for primary dish
     if not is_confident:
         primary_dish = None
 
@@ -377,6 +366,7 @@ def predict_dish_and_nutrition(
         "all_candidates": all_candidates,
         "all_classes": class_names,
         "is_confident": is_confident,
+        "non_meal_detected": False,
     }
 
 
